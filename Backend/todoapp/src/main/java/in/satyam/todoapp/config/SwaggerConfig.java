@@ -18,6 +18,6 @@ public class SwaggerConfig {
                         .title("TODO App API")
                         .version("1.0")
                         .description("API documentation for TODO application"))
-                .servers(List.of(new Server().url("http://localhost:8080")));
+                .servers(List.of(new Server().url("http://localhost:8089"))); // Changed to 8089
     }
 }

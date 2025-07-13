@@ -2,8 +2,6 @@ package in.satyam.todoapp.security;
 
 import io.jsonwebtoken.*;
 import io.jsonwebtoken.io.Decoders;
-import io.jsonwebtoken.jackson.io.JacksonDeserializer;
-import io.jsonwebtoken.jackson.io.JacksonSerializer;
 import io.jsonwebtoken.security.Keys;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -26,34 +24,59 @@ public class JwtService {
     // Called after the bean is initialized
     @PostConstruct
     public void testJwtInit() {
-        System.out.println("JWT parser init test: " + Jwts.parserBuilder().getClass().getName());
+        try {
+            System.out.println("JWT parser init test: " + Jwts.parserBuilder().getClass().getName());
+            System.out.println("JWT secret length: " + (secret != null ? secret.length() : "null"));
+            System.out.println("JWT expiration: " + expiration);
+
+            // Test key generation
+            getSigningKey();
+            System.out.println("JWT Service initialized successfully");
+        } catch (Exception e) {
+            System.err.println("Error initializing JWT Service: " + e.getMessage());
+            e.printStackTrace();
+            throw new RuntimeException("JWT Service initialization failed", e);
+        }
     }
 
     // Decode the Base64 encoded secret
     private Key getSigningKey() {
-        byte[] keyBytes = Decoders.BASE64.decode(secret);
-        return Keys.hmacShaKeyFor(keyBytes);
+        try {
+            if (secret == null || secret.trim().isEmpty()) {
+                throw new IllegalArgumentException("JWT secret cannot be null or empty");
+            }
+            byte[] keyBytes = Decoders.BASE64.decode(secret);
+            return Keys.hmacShaKeyFor(keyBytes);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to create signing key: " + e.getMessage(), e);
+        }
     }
 
     public String generateToken(String username) {
-        return Jwts.builder()
-                .serializeToJsonWith(new JacksonSerializer<>())
-                .setSubject(username)
-                .setIssuedAt(new Date(System.currentTimeMillis()))
-                .setExpiration(new Date(System.currentTimeMillis() + expiration))
-                .signWith(getSigningKey(), Jwts.SIG.HS256)
-                .compact();
+        try {
+            return Jwts.builder()
+                    .setSubject(username)
+                    .setIssuedAt(new Date(System.currentTimeMillis()))
+                    .setExpiration(new Date(System.currentTimeMillis() + expiration))
+                    .signWith(getSigningKey(), SignatureAlgorithm.HS256)
+                    .compact();
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to generate token: " + e.getMessage(), e);
+        }
     }
 
     public String generateToken(Map<String, Object> extraClaims, String username) {
-        return Jwts.builder()
-                .serializeToJsonWith(new JacksonSerializer<>())
-                .setClaims(extraClaims)
-                .setSubject(username)
-                .setIssuedAt(new Date(System.currentTimeMillis()))
-                .setExpiration(new Date(System.currentTimeMillis() + expiration))
-                .signWith(getSigningKey(), Jwts.SIG.HS256)
-                .compact();
+        try {
+            return Jwts.builder()
+                    .setClaims(extraClaims)
+                    .setSubject(username)
+                    .setIssuedAt(new Date(System.currentTimeMillis()))
+                    .setExpiration(new Date(System.currentTimeMillis() + expiration))
+                    .signWith(getSigningKey(), SignatureAlgorithm.HS256)
+                    .compact();
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to generate token with claims: " + e.getMessage(), e);
+        }
     }
 
     public String extractUsername(String token) {
@@ -66,12 +89,15 @@ public class JwtService {
     }
 
     private Claims extractAllClaims(String token) {
-        return Jwts.parserBuilder()
-                .deserializeJsonWith(new JacksonDeserializer<>())
-                .setSigningKey(getSigningKey())
-                .build()
-                .parseClaimsJws(token)
-                .getBody();
+        try {
+            return Jwts.parserBuilder()
+                    .setSigningKey(getSigningKey())
+                    .build()
+                    .parseClaimsJws(token)
+                    .getBody();
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to extract claims: " + e.getMessage(), e);
+        }
     }
 
     private boolean isTokenExpired(String token) {
@@ -79,7 +105,11 @@ public class JwtService {
     }
 
     public boolean isTokenValid(String token, String expectedUsername) {
-        String username = extractUsername(token);
-        return (username.equals(expectedUsername) && !isTokenExpired(token));
+        try {
+            String username = extractUsername(token);
+            return (username.equals(expectedUsername) && !isTokenExpired(token));
+        } catch (Exception e) {
+            return false;
+        }
     }
 }
