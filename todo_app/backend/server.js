@@ -86,14 +86,20 @@ function cleanupTrash(username) {
 
 // ===== Email / OTP helpers =====
 
-// Configure nodemailer (FILL THESE WITH REAL VALUES FOR PRODUCTION)
+// Configure nodemailer (you already set Gmail + app password)
+// const transporter = nodemailer.createTransport({
+//   service: "gmail",
+//   auth: {
+//     user: "YOUR_GMAIL@gmail.com",
+//     pass: "YOUR_16_DIGIT_APP_PASSWORD",
+//   },
+// });
+
 const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || "smtp.example.com",
-  port: Number(process.env.SMTP_PORT) || 587,
-  secure: false,
+  service: "gmail",
   auth: {
-    user: process.env.SMTP_USER || "your_smtp_user",
-    pass: process.env.SMTP_PASS || "your_smtp_password",
+    user: "sop97541@gmail.com",
+    pass: "ofje erdr gqdh vnzu", 
   },
 });
 
@@ -102,18 +108,42 @@ function generateOtp() {
 }
 
 async function sendOtpEmail(to, subject, otp) {
+  const appName = "GlowTasks";
+  const html = `
+    <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f172a;padding:24px;">
+      <div style="max-width:480px;margin:0 auto;background:#020617;border-radius:16px;border:1px solid #1f2937;padding:20px 22px;color:#e5e7eb;">
+        <h1 style="margin:0 0 8px;font-size:22px;color:#e5e7eb;">
+          ${appName} <span style="font-size:18px;">📝</span>
+        </h1>
+        <p style="margin:0 0 16px;font-size:14px;color:#9ca3af;">
+          ${subject}
+        </p>
+        <div style="text-align:center;margin:18px 0;">
+          <div style="display:inline-block;padding:12px 24px;border-radius:999px;background:linear-gradient(135deg,#6366f1,#ec4899);font-size:26px;font-weight:700;letter-spacing:4px;">
+            ${otp}
+          </div>
+        </div>
+        <p style="margin:0 0 8px;font-size:13px;color:#cbd5f5;">
+          This code is valid for <strong>10 minutes</strong>. Please do not share it with anyone.
+        </p>
+        <p style="margin:12px 0 0;font-size:12px;color:#6b7280;">
+          If you didn't request this, you can safely ignore this email.
+        </p>
+      </div>
+    </div>
+  `;
+
   try {
     await transporter.sendMail({
-      from: process.env.SMTP_FROM || "no-reply@example.com",
+      from: `"GlowTasks" <${process.env.SMTP_FROM || "no-reply@example.com"}>`,
       to,
       subject,
       text: `Your verification code is: ${otp}`,
-      html: `<p>Your verification code is: <b>${otp}</b></p>`,
+      html,
     });
     console.log(`OTP sent to ${to}: ${otp}`);
   } catch (err) {
     console.error("Failed to send email, but OTP is:", otp);
-    // For dev: still log OTP so you can test without SMTP
   }
 }
 
@@ -156,18 +186,25 @@ app.post("/api/auth/register", async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const otp = generateOtp();
+    const nowIso = new Date().toISOString();
     const expires = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // 10 mins
 
     const newUser = {
       username,
       email,
       password: hashedPassword,
-      createdAt: new Date().toISOString(),
+      createdAt: nowIso,
       verified: false,
       verificationOtp: otp,
       verificationOtpExpires: expires,
+      verificationOtpSentCount: 1,
+      lastVerificationOtpSentAt: nowIso,
+      verificationOtpAttempts: 0,
       resetOtp: null,
       resetOtpExpires: null,
+      resetOtpSentCount: 0,
+      lastResetOtpSentAt: null,
+      resetOtpAttempts: 0,
     };
 
     data.users.push(newUser);
@@ -191,6 +228,67 @@ app.post("/api/auth/register", async (req, res) => {
   }
 });
 
+// Resend signup OTP with limits
+app.post("/api/auth/resend-verify", async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ message: "Email is required" });
+    }
+
+    const user = findUserByEmail(email);
+    if (!user) {
+      return res.status(400).json({ message: "User not found for this email" });
+    }
+
+    if (user.verified === true) {
+      return res.status(400).json({ message: "User already verified" });
+    }
+
+    const now = Date.now();
+
+    // Cooldown: 60 seconds between sends
+    if (user.lastVerificationOtpSentAt) {
+      const last = new Date(user.lastVerificationOtpSentAt).getTime();
+      if (now - last < 60 * 1000) {
+        const remaining = Math.ceil((60 * 1000 - (now - last)) / 1000);
+        return res.status(429).json({
+          message: `Please wait ${remaining}s before requesting another OTP`,
+        });
+      }
+    }
+
+    // Max 5 sends total
+    const count = user.verificationOtpSentCount || 0;
+    if (count >= 5) {
+      return res
+        .status(429)
+        .json({ message: "Too many OTP requests. Please try again later." });
+    }
+
+    const otp = generateOtp();
+    const expires = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+
+    user.verificationOtp = otp;
+    user.verificationOtpExpires = expires;
+    user.verificationOtpSentCount = count + 1;
+    user.lastVerificationOtpSentAt = new Date().toISOString();
+    user.verificationOtpAttempts = 0;
+    saveData();
+
+    await sendOtpEmail(
+      email,
+      "Your GlowTasks verification code",
+      otp
+    );
+
+    return res.json({ message: "New OTP sent to your email." });
+  } catch (err) {
+    console.error("Resend verify error:", err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+});
+
 // Verify signup OTP
 app.post("/api/auth/verify-otp", (req, res) => {
   const { email, otp } = req.body;
@@ -204,28 +302,36 @@ app.post("/api/auth/verify-otp", (req, res) => {
     return res.status(400).json({ message: "Invalid email or OTP" });
   }
 
-  // Existing users (before OTP system) might not have fields
-  if (!user.verificationOtp || !user.verificationOtpExpires) {
-    if (user.verified === true || user.verified === undefined) {
-      return res.json({ message: "Already verified" });
-    }
-    return res.status(400).json({ message: "No OTP to verify" });
+  // If user already verified
+  if (user.verified === true && !user.verificationOtp) {
+    return res.json({ message: "Already verified" });
   }
 
   const now = Date.now();
-  const exp = new Date(user.verificationOtpExpires).getTime();
+  if (user.verificationOtpExpires) {
+    const exp = new Date(user.verificationOtpExpires).getTime();
+    if (now > exp) {
+      return res.status(400).json({ message: "OTP expired. Request a new one." });
+    }
+  }
 
-  if (now > exp) {
-    return res.status(400).json({ message: "OTP expired. Please register again." });
+  const attempts = user.verificationOtpAttempts || 0;
+  if (attempts >= 5) {
+    return res
+      .status(429)
+      .json({ message: "Too many wrong attempts. Request a new OTP." });
   }
 
   if (user.verificationOtp !== otp) {
+    user.verificationOtpAttempts = attempts + 1;
+    saveData();
     return res.status(400).json({ message: "Incorrect OTP" });
   }
 
   user.verified = true;
   user.verificationOtp = null;
   user.verificationOtpExpires = null;
+  user.verificationOtpAttempts = 0;
   saveData();
 
   return res.json({ message: "Email verified successfully" });
@@ -271,7 +377,7 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
-// Forgot password: send OTP to email
+// Forgot password: send OTP to email (with limits)
 app.post("/api/auth/forgot", async (req, res) => {
   try {
     const { email } = req.body;
@@ -280,11 +386,32 @@ app.post("/api/auth/forgot", async (req, res) => {
     }
 
     const user = findUserByEmail(email);
-    // For security: respond success even if user not found
+    // If user doesn't exist, respond generic success
     if (!user) {
       return res.json({
         message: "If this email exists, an OTP has been sent.",
       });
+    }
+
+    const now = Date.now();
+
+    // Cooldown: 60s between reset OTPs
+    if (user.lastResetOtpSentAt) {
+      const last = new Date(user.lastResetOtpSentAt).getTime();
+      if (now - last < 60 * 1000) {
+        const remaining = Math.ceil((60 * 1000 - (now - last)) / 1000);
+        return res.status(429).json({
+          message: `Please wait ${remaining}s before requesting another OTP`,
+        });
+      }
+    }
+
+    // Max 5 reset OTPs
+    const count = user.resetOtpSentCount || 0;
+    if (count >= 5) {
+      return res
+        .status(429)
+        .json({ message: "Too many reset requests. Please try again later." });
     }
 
     const otp = generateOtp();
@@ -292,6 +419,9 @@ app.post("/api/auth/forgot", async (req, res) => {
 
     user.resetOtp = otp;
     user.resetOtpExpires = expires;
+    user.resetOtpSentCount = count + 1;
+    user.lastResetOtpSentAt = new Date().toISOString();
+    user.resetOtpAttempts = 0;
     saveData();
 
     await sendOtpEmail(email, "Your GlowTasks password reset code", otp);
@@ -328,7 +458,16 @@ app.post("/api/auth/reset", async (req, res) => {
       return res.status(400).json({ message: "OTP expired, please try again." });
     }
 
+    const attempts = user.resetOtpAttempts || 0;
+    if (attempts >= 5) {
+      return res
+        .status(429)
+        .json({ message: "Too many wrong attempts. Request a new OTP." });
+    }
+
     if (user.resetOtp !== otp) {
+      user.resetOtpAttempts = attempts + 1;
+      saveData();
       return res.status(400).json({ message: "Incorrect OTP" });
     }
 
@@ -336,6 +475,7 @@ app.post("/api/auth/reset", async (req, res) => {
     user.password = hashedPassword;
     user.resetOtp = null;
     user.resetOtpExpires = null;
+    user.resetOtpAttempts = 0;
     saveData();
 
     return res.json({ message: "Password reset successful" });
@@ -506,3 +646,6 @@ app.post("/api/trash/restore", authMiddleware, (req, res) => {
 app.listen(PORT, () => {
   console.log(`Backend running on http://localhost:${PORT}`);
 });
+
+
+
